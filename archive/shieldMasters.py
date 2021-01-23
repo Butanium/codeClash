@@ -22,7 +22,7 @@ class EnemyInfo:
     def __init__(self, index):
         self.index = index
         self.prev_check = 0
-        self.lap = 0
+        self.lap = 1
 
     def update(self, infos):
         if infos.next_checkpoint_id != self.prev_check:
@@ -44,7 +44,6 @@ class PodController:
         self.angle_diff = 0
         self.ally_angle_diff = 180
         self.ally = None
-        self.slow = False
 
     def get_output(self, infos: PodInfo):
         self.ally = ally_pod_info[1 - self.index]
@@ -97,10 +96,6 @@ class PodController:
             output_speed = "BOOST"
             self.boost = 0
             debug("BOOOOOOST")
-        if not self.init and infos.next_check_dist > 5000:
-            output_speed = "BOOST"
-            self.boost = 0
-            debug("BOOOOOOST")
         for e in enemy_pod_info:
             if collide(infos.pos, infos.speed, e.pos, e.speed):
                 output_speed = "SHIELD"
@@ -115,47 +110,26 @@ class PodController:
     def fighter(self, infos: PodInfo):
         sensitivity = .01
 
-        tot0 = enemy_pod_info[0].next_checkpoint_id + (enemies_infos[0].lap - 1) * checkpoint_count + \
-               (0 if enemy_pod_info[0].next_checkpoint_id else checkpoint_count)
-        tot1 = enemy_pod_info[1].next_checkpoint_id + (enemies_infos[1].lap - 1) * checkpoint_count + \
-               (0 if enemy_pod_info[1].next_checkpoint_id else checkpoint_count)
+        tot0 = enemy_pod_info[0].next_checkpoint_id + enemies_infos[0].lap * checkpoint_count
+        tot1 = enemy_pod_info[1].next_checkpoint_id + enemies_infos[1].lap * checkpoint_count
 
-        debug("tot 1: " + str(tot0) + "   tot 2:" + str(tot1))
-        debug("lap: " + str(enemies_infos[0].lap))
         if tot0 > tot1:
             self.locked_target = enemy_pod_info[0]
-            debug("pod 1 is first")
         elif tot0 < tot1:
             self.locked_target = enemy_pod_info[1]
-            debug("pod 2 is first")
-        else:
-            if enemy_pod_info[0].next_check_dist > enemy_pod_info[1].next_check_dist:
-                self.locked_target = enemy_pod_info[1]
-                debug("pod 2 is closer")
+        if self.locked_target:
+            if self.locked_target.next_check_dist < dist(infos.pos, self.locked_target.next_check_pos):
+                target = checkpoints[(self.locked_target.next_checkpoint_id + 1) % checkpoint_count]
             else:
-                self.locked_target = enemy_pod_info[0]
-                debug("pod 1 is closer")
-        if self.locked_target.next_check_dist < dist(infos.pos, self.locked_target.next_check_pos):
-            target = checkpoints[(self.locked_target.next_checkpoint_id + 1) % checkpoint_count]
-            self.slow = True
+                target = ((self.locked_target.next_check_pos + self.locked_target.pos) / 2).astype(int)
+                # todo better targeting if enemy is close
         else:
-            target = ((self.locked_target.next_check_pos + self.locked_target.pos) / 2).astype(int)
-            if dist(target, infos.pos) < 2000:
-                target = self.locked_target.pos
-            self.slow = False
-        debug("locked target dist: " + str(dist(self.locked_target.pos, infos.pos)))
-        if dist(self.locked_target.pos, infos.pos) < 2500:
-            debug("enemy near")
-            target = self.locked_target.pos
-            self.slow = False
-
+            target = infos.next_check_pos
         if magnitude(infos.speed):
             self.angle_diff = angle_btw(infos.speed, infos.pos, target)
 
         angle = angle_btw(rotate(np.array([0, 0]), np.array([1, 0]), infos.angle * pi / 180), infos.pos,
                           target)
-        # todo change the target when aiming to moving pod depending on self and enemy speed and directions : predict
-        #  the target pos depending on my distance etc
         if angle < 20 and magnitude(infos.speed):
             rot1 = rotate(infos.pos, target, self.angle_diff * sensitivity).astype(int)
             rot2 = rotate(infos.pos, target, -1 * self.angle_diff * sensitivity).astype(int)
@@ -166,14 +140,7 @@ class PodController:
         else:
             to_reach_x = target[0]
             to_reach_y = target[1]
-
-        if self.slow:
-            debug("slowing_down")
-            d = dist(infos.pos, target)
-            b = -3.13
-            output_speed = min(speed(angle), int(-(1 / (1 + math.exp(-(d - 1500) * b * 0.001)) - 1 / 2) * 100 + 50))
-        else:
-            output_speed = speed(angle, 2)
+        output_speed = speed(angle)
         for e in enemy_pod_info:
             # debug("distance: " + str(dist(e.pos, infos.pos)))
             if collide(infos.pos, infos.speed, e.pos, e.speed):
@@ -183,7 +150,7 @@ class PodController:
 
 
 def magnitude(vector: np.array):
-    return dist(vector[0], vector[1])
+    return dist(0, 0, vector[0], vector[1])
 
 
 # Auto-generated code below aims at helping you parse
@@ -218,20 +185,23 @@ def scalar(u: np.array, v: np.array):
     return sum(u * v)
 
 
-def speed(agl, mode=1):
+def speed(agl, mode=2, smooth=.05):
     if mode == 1:
-        return int((.5 - 1 / (1 + math.exp(-(agl - 90)) * .05)) * 100 + 50)
+        return 100 - int(agl // 1.8)
     elif mode == 2:
-        if agl > 140:
-            return speed(agl)
+        return int((.5 - 1 / (1 + math.exp(-(agl - 90)) * smooth)) * 100 + 50)
+    elif mode == 3:
+        if agl > 90:
+            return speed(agl, 2, .07)
         else:
-            return int((.5 - 1 / (1 + math.exp(-(agl - 25)) * .2)) * 90 + 55)
+            return speed(agl, 1)
 
 
 def collide(pos1, v1, pos2, v2):
     newpos1 = pos1 + v1
     newpos2 = pos2 + v2
     return dist(newpos1, newpos2) < 800
+
 
 
 allies_controllers = [PodController(0), PodController(1)]
